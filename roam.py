@@ -1,5 +1,5 @@
 """
-The fly, loose on the internet.
+The fly, loose on the internet with a random lifespan.
 
 A page is screenshotted, sampled through the fly's 892 retinotopic hex columns
 into L1 and L2, and 165,122 neurons integrate. DNa02's left-right asymmetry
@@ -7,45 +7,19 @@ moves the cursor sideways, DNa01 moves it up the page, MDN reverses, and DNp09
 - the stopping neuron - clicks. If the click lands on a link, the fly is
 somewhere new. Nothing chooses where it goes. That is the whole point.
 
-Be clear about what this is. A fly brain has no language, no goals and no plan.
-It cannot read a page, decide a destination or want anything. What it has is a
-real nervous system reacting to light, and what comes out is a cursor. Calling
-it browsing is fair; calling it deciding is not.
+The fly has a random lifespan: each life lasts between LIFESPAN_MIN and
+LIFESPAN_MAX seconds, after which it dies and a new one is born. Deaths are
+logged to build/deaths.json.
 
 RAILS, and why each one is here
 -------------------------------
-* No wallet. This browser never gets a key, a provider or an extension. A
-  random clicker with a signing key is how you lose everything, so the roaming
-  browser and the launching browser have nothing in common but the brain.
-* No typing. The fly has no keyboard at all - it cannot fill a field, write a
-  message or answer a prompt.
+* No wallet. This browser never gets a key, a provider or an extension.
+* No typing. The fly has no keyboard at all.
 * No downloads, no popups, no file dialogs.
 * A click is checked before it lands: anything that looks like a submit, an
   upload, a payment or a sign-in is vetoed and logged as a veto.
-* A URL blocklist, checked on every navigation. This is a public live stream;
-  an unfiltered random walk will eventually find something nobody wants
-  broadcast. Blocked pages bounce straight back.
-* A hop budget. When it runs out the fly is put back on a seed page, so a dead
-  end does not become a permanent home.
-
-THE BACKROOM (FLY_BACKROOM=1 only)
-----------------------------------
-With FLY_BACKROOM=1 one more place exists: a page this project serves itself at
-/backroom, holding a grid of coin cards. A share of the restarts that would put
-the fly back on a web seed put it in there instead (FLY_BACKROOM_SHARE), and it
-walks that page with the same eye, the same descending neurons and the same
-stopping rule it uses everywhere else. What changes is what a stop means: in the
-room a stop on a card is read as a commit and becomes one HTTP POST to the paper
-executor on loopback. This build is paper - nothing here signs anything - and
-the fence is tightened rather than loosened for it: the only address on this
-machine the fly may ever open is that one page, and nothing else on loopback.
-Without FLY_BACKROOM=1 none of it exists and the roam is exactly what it was.
-
-Dopamine now comes from one thing only. It used to be handed out here for
-finding somewhere new, hitting a wall or reaching for a vetoed control, which
-taught the mushroom body about the shape of the web. Profit and loss are the
-only lessons left, and they are delivered in backroom.py where they are
-measured.
+* A URL blocklist, checked on every navigation.
+* A hop budget. When it runs out the fly is put back on a seed page.
 
   py roam.py                 open http://localhost:4660 and press START
   py roam.py --headful       watch the real browser too
@@ -54,7 +28,6 @@ import argparse
 import asyncio
 import base64
 import io
-import ipaddress
 import json
 import os
 import random
@@ -77,12 +50,20 @@ from flyeye import FlyPilot
 ROOT = Path(__file__).parent
 OUT = ROOT / "build"
 
+# Random lifespan: each life lasts between MIN and MAX seconds, then dies.
+LIFESPAN_MIN_S = 60    # 1 minute
+LIFESPAN_MAX_S = 3600  # 60 minutes
+
+# Death log file
+DEATHS_FILE = OUT / "deaths.json"
+
 
 def _atomic_write(path, data: bytes):
     """Write then rename, so /state never reads a half-written file."""
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_bytes(data)
     os.replace(tmp, path)
+
 
 # Link-rich, text-heavy, safe places to be dropped into. The fly leaves them
 # on its own within a few clicks; these only decide where a life starts.
@@ -102,16 +83,7 @@ SEEDS = [
     "https://www.gutenberg.org/browse/scores/top",
     "https://openlibrary.org/",
     "https://xkcd.com/",
-    # and the chain it launched its own token on
-    "https://www.ponsfamily.com/launchpad/explore",
-    "https://www.ponsfamily.com/launchpad/0x4eb990547bce4a982432ca88cf5fae7eed1a2d35",
-    "https://robinhoodchain.blockscout.com/txs",
 ]
-
-# Hacker News and arXiv were seeds and had to go. Both are link dead ends
-# behind a fence: almost every link on them points at a domain that is not
-# allowed, so a click there goes nowhere, the budget expires and the fly is
-# bounced back to a seed. They looked like rich pages and were traps.
 
 
 # Checked against every URL the browser tries to commit to.
@@ -119,8 +91,6 @@ BLOCK = re.compile(
     r"(porn|xxx|adult|nsfw|escort|hentai|onlyfans|camsoda|chaturbate"
     r"|casino|bet365|poker|gambl|lottery"
     r"|checkout|/cart|/pay|payment|billing|invoice|subscribe"
-    # it roams trading sites now, where every other control is a trade
-    r"|/buy|/sell|/swap|/trade|connect-wallet|/deposit|/withdraw"
     r"|signin|sign-in|login|log-in|signup|sign-up|register|/auth"
     r"|password|passwd|account/delete|unsubscribe"
     r"|\.exe$|\.dmg$|\.msi$|\.apk$|\.zip$|\.torrent$|magnet:"
@@ -141,34 +111,8 @@ ALLOW = {
     "openlibrary.org",
     "xkcd.com", "www.xkcd.com",
     "arxiv.org", "www.arxiv.org",
-    "www.ponsfamily.com", "ponsfamily.com",
-    "robinhoodchain.blockscout.com",
 }
 OPEN = load_env().get("FLY_ROAM_OPEN") == "1"
-
-# Everything about the room is read when it is asked for rather than at import,
-# because the supervisor hands each child its own environment and a test has to
-# be able to change it. load_env merges every FLY_* variable of the process over
-# .env, so these work from the environment run_all.py builds.
-BACKROOM_SHARE = 0.35      # chance a reset puts the fly in the room (CHOSEN)
-BACKROOM_STEPS = 120       # steps of one visit before the reset (CHOSEN)
-EXECUTOR_PORT = 4671
-# Every coin's smell scaled toward the same total. DoOR has no dose axis, so how
-# strong a coin smells is an accident of which odorant its words name; scaling
-# each profile toward one total takes most of that accident out - not all of it,
-# because no receptor may respond above 1.0, so a coin landing on one glomerulus
-# totals 1.0 where one spread over twenty totals 2.0 (olfaction.Nose.smell says
-# this in full, and every smell carries its achieved `loudness`).
-# MEASURED 2026-09-12: without it
-# geosmin alone fires 42% of the Kenyon cells against isopentyl acetate's 4.9%,
-# so a lesson about a loud coin lands on five times as many synapses and swamps
-# the quiet ones. This is the setting the offline screen passed on
-# (backroom_screen.py --norm 2.0, build/backroom_screen.json). CHOSEN, and it
-# changes nothing outside the room, which is the only place the nose is used.
-EQUAL_SNIFF = 2.0
-# Names that mean this machine without being addresses. Everything else is
-# decided by classifying the address itself, in this_machine().
-LOCAL_NAMES = {"localhost"}
 
 
 def env(name, default=""):
@@ -176,290 +120,63 @@ def env(name, default=""):
     return default if v is None or v == "" else str(v)
 
 
-def backroom_on():
-    """The room exists only when someone turned it on."""
-    return env("FLY_BACKROOM") == "1"
-
-
-def backroom_share():
-    try:
-        return min(1.0, max(0.0, float(env("FLY_BACKROOM_SHARE", BACKROOM_SHARE))))
-    except (TypeError, ValueError):
-        return BACKROOM_SHARE
-
-
-def backroom_steps():
-    try:
-        return max(1, int(float(env("FLY_BACKROOM_STEPS", BACKROOM_STEPS))))
-    except (TypeError, ValueError):
-        return BACKROOM_STEPS
-
-
-def roam_port():
-    return int(STATE.get("port") or os.environ.get("PORT") or 4660)
-
-
-def backroom_url():
-    """The one address on this machine the fly is allowed to open."""
-    return f"http://127.0.0.1:{roam_port()}/backroom"
-
-
-def executor_url():
-    try:
-        port = int(env("FLY_EXECUTOR_PORT", EXECUTOR_PORT))
-    except (TypeError, ValueError):
-        port = EXECUTOR_PORT
-    return f"http://127.0.0.1:{port}"
-
-
-def state_dir():
-    return Path(env("FLY_STATE_DIR") or OUT)
-
-
-def is_backroom(url):
-    """
-    True only for the room's own page on this process's own port.
-
-    Not a prefix test. /backroom/board.json, /state and /frame.jpg are on the
-    same socket and none of them is a place for the fly to be; the page it walks
-    is exactly one URL.
-    """
-    try:
-        from urllib.parse import urlparse
-        u = urlparse(str(url))
-    except Exception:
-        return False
-    if u.scheme != "http" or (u.hostname or "").lower() != "127.0.0.1":
-        return False
-    if (u.port or 80) != roam_port() or u.query or u.fragment:
-        return False
-    return u.path.rstrip("/") == "/backroom"
-
-
-def this_machine(host):
-    """
-    True for an address that is this machine, or a network this machine sits
-    on, however it is spelled.
-
-    This used to be four literal strings - 127.0.0.1, localhost, ::1, 0.0.0.0 -
-    which is not the loopback network. Every other spelling fell through to the
-    fence, and with the fence down (FLY_ROAM_OPEN=1) 127.0.0.2, ::ffff:127.0.0.1,
-    169.254.169.254 - the cloud metadata service - and anything on 10/172.16/192.168
-    were all treated as ordinary web addresses. The test is the address itself,
-    so the room stays the single exception to "this machine is not the web".
-    """
-    h = str(host or "").strip().strip("[]").lower()
-    if not h:
-        return False
-    if h in LOCAL_NAMES or h.endswith(".localhost"):
-        return True
-    try:
-        ip = ipaddress.ip_address(h)
-    except ValueError:
-        return False
-    if getattr(ip, "ipv4_mapped", None) is not None:
-        ip = ip.ipv4_mapped
-    return bool(ip.is_loopback or ip.is_link_local or ip.is_private
-                or ip.is_reserved or ip.is_unspecified or ip.is_multicast)
+# Checked against the element under the cursor before a click is allowed.
+VETO = re.compile(
+    r"(submit|upload|sign in|sign up|log in|log out|subscribe|buy|purchase"
+    r"|checkout|pay |donate|delete|remove|report|flag|send|post|reply"
+    r"|comment|password|credit card)", re.I)
 
 
 def allowed_host(url):
-    """Open mode drops the fence and leaves only the blocklist behind it."""
+    """The fly stays inside the allowlist unless FLY_ROAM_OPEN=1."""
     try:
         from urllib.parse import urlparse
         host = (urlparse(url).hostname or "").lower()
     except Exception:
         return False
-    if this_machine(host):
-        # This machine, and the private networks around it, are not the web.
-        # The room is the single exception, and only while it is switched on -
-        # open mode does not widen this.
-        return backroom_on() and is_backroom(url)
     if OPEN:
         return True
     return host in ALLOW
 
 
-def next_place(rng, room_open=True):
-    """
-    Where a restart puts the fly: (url, what to call it).
-
-    With the room off this is what it always was, one draw from SEEDS, and the
-    random stream is untouched - nothing else is drawn. With the room on, that
-    many restarts in FLY_BACKROOM_SHARE go through the door instead.
-    `room_open` is False when the room was switched on but could not be built
-    (no mushroom body, say): an unbuilt room is a page with nothing behind it,
-    so the fly is not sent there.
-    """
-    if backroom_on() and room_open and rng.random() < backroom_share():
-        return backroom_url(), "the backroom"
-    return rng.choice(SEEDS), "a seed"
-
-
-# Checked against the element under the cursor before a click is allowed.
-VETO = re.compile(
-    r"(submit|upload|sign in|sign up|log in|log out|subscribe|buy|purchase"
-    r"|sell|swap|trade|connect wallet|approve|confirm|bridge|stake"
-    r"|checkout|pay |donate|delete|remove|report|flag|send|post|reply"
-    r"|comment|password|credit card)", re.I)
-
-BLOB_TOKEN = load_env().get("FLY_BLOB_TOKEN", "")
-BLOB_BASE = load_env().get("FLY_BLOB_BASE", "")
-BLOB_EVERY = 0.5          # seconds between pushes; the run does not wait on it
-_last_push = {"at": 0.0}
-
-
-def blob_put(path, data, ctype):
-    """
-    Push one object to the public store the site reads.
-
-    Overwrites the same pathname every time, so the site has a stable URL and
-    no cleanup to do. Failures are swallowed on purpose: the fly roaming and
-    the world watching are separate concerns, and a flaky upload must not stop
-    a run.
-    """
-    import urllib.request
-    req = urllib.request.Request(
-        f"https://blob.vercel-storage.com/{path}", method="PUT", data=data,
-        headers={"authorization": f"Bearer {BLOB_TOKEN}",
-                 "x-content-type": ctype,
-                 "x-add-random-suffix": "0",
-                 "x-allow-overwrite": "1",
-                 "x-cache-control-max-age": "0",
-                 "x-api-version": "7"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return r.status
-
-
-TUNNEL = {"url": None, "proc": None}
-CFD = Path(os.path.expanduser("~/.claude/tools/cloudflared/cloudflared.exe"))
-
-
-def start_tunnel(port):
-    """
-    Put the roamer's WebSocket on the public internet.
-
-    Object storage is not a stream - the site could only ever poll it - so the
-    live screen needs a socket a browser can open. A quick tunnel gives one
-    without an account; the address is random and changes every run, so the fly
-    publishes whatever it got alongside its state and the page reads it from
-    there rather than having it hardcoded anywhere.
-    """
-    import re as _re
-    import subprocess
-    import threading
-
-    if os.environ.get("FLY_TUNNEL") == "0":
-        # a local run publishes nothing at all: no tunnel, so no address to
-        # write anywhere, so nobody outside this machine can watch it
-        say("FLY_TUNNEL=0 - this run stays on this machine")
-        return
-    if not CFD.exists():
-        say("no cloudflared - the public feed stays on the slow path")
-        return
-
-    proc = subprocess.Popen(
-        [str(CFD), "tunnel", "--no-autoupdate", "--url",
-         f"http://127.0.0.1:{port}"],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        encoding="utf-8", errors="replace", bufsize=1)
-    TUNNEL["proc"] = proc
-
-    def watch():
-        for line in proc.stdout:
-            m = _re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
-            if m and not TUNNEL["url"]:
-                TUNNEL["url"] = m.group(0)
-                say("tunnel open:", TUNNEL["url"])
-
-    threading.Thread(target=watch, daemon=True).start()
-
-
-LIVE_REPO = "fruitflydev/flycoinrh"
-LIVE_PATH = "site/web/live.json"
-_addr = {"url": None, "at": 0.0}
-
-
-def publish_address():
-    """
-    Tell the world where the tunnel is.
-
-    The quick tunnel's address is random and changes every run, so the page
-    cannot have it hardcoded. This writes it to one small file in the public
-    repo, which the page reads. It is written only when the address actually
-    changes, so a long run makes no commits at all.
-    """
-    import base64 as _b64
-    import urllib.request
-
-    tok = load_env().get("FLY_GH_TOKEN", "")
-    url = TUNNEL["url"]
-    if not tok or not url or url == _addr["url"]:
-        return
-    if time.time() - _addr["at"] < 30:
-        return
-    _addr["at"] = time.time()
-
-    body = json.dumps({"stream": url, "at": int(time.time())}, indent=1) + chr(10)
-    api = f"https://api.github.com/repos/{LIVE_REPO}/contents/{LIVE_PATH}"
-
-    def call(method, payload=None):
-        req = urllib.request.Request(
-            api, method=method,
-            data=json.dumps(payload).encode() if payload else None,
-            headers={"Authorization": f"Bearer {tok}",
-                     "Accept": "application/vnd.github+json",
-                     "User-Agent": "flybrain"})
-        with urllib.request.urlopen(req, timeout=25) as r:
-            return json.loads(r.read() or b"{}")
-
+def log_death(cause, url, steps, clicks, hops, blocked):
+    """Record a death to build/deaths.json."""
     try:
-        sha = None
-        try:
-            sha = call("GET").get("sha")
-        except Exception:
-            pass
-        payload = {"message": "the fly moved house",
-                   "content": _b64.b64encode(body.encode()).decode()}
-        if sha:
-            payload["sha"] = sha
-        call("PUT", payload)
-        _addr["url"] = url
-        say("published tunnel address")
+        deaths = []
+        if DEATHS_FILE.exists():
+            try:
+                deaths = json.loads(DEATHS_FILE.read_text())
+            except Exception:
+                deaths = []
+        deaths.append({
+            "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "epoch": int(time.time()),
+            "cause": cause,
+            "last_url": url,
+            "steps": steps,
+            "clicks": clicks,
+            "hops": hops,
+            "blocked": blocked,
+        })
+        # Keep last 1000 deaths
+        deaths = deaths[-1000:]
+        _atomic_write(DEATHS_FILE, json.dumps(deaths, indent=1).encode("utf-8"))
     except Exception as exc:
-        say("could not publish address:", str(exc)[:90])
-
-
-def blob_del(path):
-    """Drop one object. Old frames are litter, not history."""
-    import urllib.request
-    try:
-        req = urllib.request.Request(
-            "https://blob.vercel-storage.com/delete", method="POST",
-            data=json.dumps({"urls": [f"{BLOB_BASE}/{path}"]}).encode(),
-            headers={"authorization": f"Bearer {BLOB_TOKEN}",
-                     "content-type": "application/json",
-                     "x-api-version": "7"})
-        urllib.request.urlopen(req, timeout=10)
-    except Exception:
-        pass
+        say(f"failed to write death log: {exc}")
 
 
 app = FastAPI()
 # the public page reads /state and /frame.jpg from a different origin
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"],
                    allow_headers=["*"])
-STATE = {"brain": None, "pilot": None, "running": False, "room": None}
+STATE = {"brain": None, "pilot": None, "running": False,
+         "life_start": 0.0, "life_age_s": 0.0, "life_death": None,
+         "lifespan_s": 0.0}
 CLIENTS = set()
 
 
 async def broadcast(msg):
-    """
-    Tell every watcher at once.
-
-    The fly does not roam because somebody is watching and does not stop when
-    they leave, so a viewer is a subscriber and never a controller.
-    """
+    """Tell every watcher at once."""
     dead = []
     text = json.dumps(msg)
     for ws in list(CLIENTS):
@@ -483,15 +200,7 @@ def say(*parts):
 
 
 def load_brain():
-    """
-    The brain, once, with the calibration measured in calibration.py.
-
-    The stock simulator ignites: any odour fires almost every Kenyon cell, so
-    nothing can be learned about one smell rather than another. The gains below
-    are the measured setting, and every run in this process - roaming and room
-    alike - is made with them, because a fly that saw the world one way and
-    learned in another would be two animals.
-    """
+    """Load the connectome once, with calibration measured in calibration.py."""
     if STATE["brain"] is None:
         say("loading the connectome ...")
         fb = FlyBrain()
@@ -502,105 +211,19 @@ def load_brain():
         say(f"brain ready: {len(fb.bodies):,} neurons")
         say(f"calibration: {calibration.CHOSEN}")
         try:
-            # The store is named here rather than left to mushroom.py, which
-            # resolves FLY_STATE_DIR from the process environment alone. This
-            # process resolves it through .env as well (state_dir -> env ->
-            # launch.load_env), and a run started by hand - `py executor.py`
-            # then `py roam.py`, with FLY_STATE_DIR in .env and not exported -
-            # otherwise wrote the ledger, the room and the looks to the
-            # configured directory and everything the fly had learned to the
-            # repo's build/. On a volume-backed host that is the one file the
-            # volume exists for, outside the volume.
             STATE["mb"] = MushroomBody(fb, calibration=calibration.CHOSEN,
-                                       store=state_dir() / "mb_gains.v2.npz")
+                                       store=OUT / "mb_gains.v2.npz")
             st = STATE["mb"].stats()
-            say(f"mushroom body: {st['synapses']:,} KC->MBON synapses "
-                f"({st['reward_side']:,} reward / {st['punish_side']:,} punish), "
-                f"{st['depressed']:,} already depressed")
+            say(f"mushroom body: {st['synapses']:,} KC->MBON synapses")
         except FileNotFoundError as exc:
-            # build/mb_sides.json is derived and gitignored, so an image can be
-            # built without it. That is a missing learning circuit, not a
-            # missing fly: roaming needs none of it. It must be loud, and the
-            # room refuses to open without one rather than pretending to learn.
             STATE["mb"] = None
             say("NO MUSHROOM BODY:", str(exc)[:200])
             say("the fly roams, but nothing can be learned until mb_sides.py has run")
     return STATE["brain"], STATE["pilot"]
 
 
-def load_room():
-    """
-    The room, built the first time it is needed and only when it is on.
-
-    backroom.py is imported here rather than at the top of the file so that a
-    roamer without FLY_BACKROOM=1 pulls in nothing of the coin side at all -
-    not the nose, not the listing, not a single chain library.
-    """
-    if STATE.get("room") is None and backroom_on():
-        import backroom
-        from olfaction import Nose
-        fb, pilot = load_brain()
-        if STATE.get("mb") is None:
-            say("the backroom stays shut: there is no mushroom body for it to teach")
-            return None
-        nose = Nose(fb, equal_sniff=EQUAL_SNIFF)
-        nose.max_hz = calibration.SETTINGS[calibration.CHOSEN]["odour_max_hz"]
-        STATE["room"] = backroom.Room(
-            fb, pilot, STATE["mb"], nose, STATE["gains"], state_dir(),
-            executor_url(), env("FLY_INTENT_TOKEN"))
-        say(f"the backroom is open: {backroom_url()} -> paper executor at "
-            f"{executor_url()}, {nose.cells:,} receptor neurons")
-    return STATE.get("room")
-
-
-def open_room():
-    """
-    load_room(), with every way of failing degraded to a shut room.
-
-    load_room already degrades when there is no mushroom body: it says so and
-    returns None, and next_place then stops sending the fly to the room. Every
-    other failure inside it was unhandled, and the call sits inside roam()
-    after Chromium, the context and the page are up and before the fly has
-    opened a single page. An image without the DoOR tables raises
-    FileNotFoundError there; the exception escapes roam(), begin()'s loop logs
-    it and sleeps six seconds, and that repeats for ever - a blank stream and a
-    service that answers /status while doing nothing at all. A missing dataset
-    costs the room, not the roam.
-    """
-    try:
-        return load_room()
-    except Exception as exc:
-        say("the backroom stays shut:", f"{type(exc).__name__}: {str(exc)[:160]}")
-        return None
-
-
-def backroom_state():
-    """
-    What the room and the paper book look like right now.
-
-    The book is the executor's own file, read from disk: this process writes
-    nothing of it and could not, since it holds no ledger.
-    """
-    room = STATE.get("room")
-    book = None
-    try:
-        p = state_dir() / "backroom" / "public" / "public.json"
-        if p.exists():
-            book = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        book = None
-    return {"enabled": backroom_on(), "mode": "paper", "book": book,
-            "room": room.state() if room is not None else None,
-            "updated": int(time.time())}
-
-
 def soma_xy(fb):
-    """
-    Each neuron's measured soma position, flattened to the screen.
-
-    Used only to place a dot. Every coordinate is the real one from the
-    annotations table - the scatter is anatomy, not a shape.
-    """
+    """Each neuron's measured soma position, flattened to the screen."""
     try:
         import pandas as pd
         a = pd.read_feather(ROOT / "data" / "body-annotations.feather")
@@ -680,6 +303,13 @@ async def roam(steps_per_page=44, headful=False, seed=None):
 
     send = broadcast
 
+    # Random lifespan for this life
+    lifespan_s = rng.uniform(LIFESPAN_MIN_S, LIFESPAN_MAX_S)
+    life_start = time.time()
+    STATE["life_start"] = life_start
+    STATE["life_death"] = None
+    STATE["lifespan_s"] = lifespan_s
+
     async def log(m):
         say("  " + str(m))
         stats["events"].append({"t": time.strftime("%H:%M:%S"), "m": str(m)[:110]})
@@ -687,7 +317,7 @@ async def roam(steps_per_page=44, headful=False, seed=None):
         await send({"type": "log", "msg": str(m)})
 
     stats = {"steps": 0, "clicks": 0, "vetoes": 0, "hops": 0,
-             "blocked": 0, "scrolled": 0, "started": time.time(),
+             "blocked": 0, "scrolled": 0, "started": life_start,
              "visited": [], "events": [], "firing": []}
 
     async with async_playwright() as pw:
@@ -708,9 +338,7 @@ async def roam(steps_per_page=44, headful=False, seed=None):
         page = await ctx.new_page()
         page.on("dialog", lambda d: asyncio.create_task(d.dismiss()))
 
-        # A popup is not somewhere the fly chose to go, so it gets closed - but
-        # the handler fires for the main page too, and closing that ends the
-        # run before it starts.
+        # A popup is not somewhere the fly chose to go, so it gets closed
         def _popup(p):
             if p is not page:
                 asyncio.create_task(p.close())
@@ -738,18 +366,10 @@ async def roam(steps_per_page=44, headful=False, seed=None):
                 return False
 
         async def reset(why):
-            """
-            Every restart goes through one door.
+            """Every restart goes through one door. A new life or a hop reset."""
+            url = rng.choice(SEEDS)
+            return await goto(url, f"{why}")
 
-            A life begins, a hop budget runs out, a click lands somewhere
-            blocked: all three end up here, and here is the only place that
-            decides between a web seed and the room. Nothing else in this file
-            may send the fly anywhere.
-            """
-            url, where = next_place(rng, room is not None)
-            return await goto(url, f"{why}: {where}")
-
-        room = open_room()
         await reset("a new life")
 
         cx, cy = 640.0, 400.0
@@ -757,12 +377,6 @@ async def roam(steps_per_page=44, headful=False, seed=None):
         on_page = 0
 
         # Screencast, not screenshots.
-        #
-        # page.screenshot() in a loop tops out near three frames a second -
-        # each call is a fresh round trip and a fresh encode - which looked
-        # like a slideshow of stills. Chrome's own screencast pushes a frame
-        # whenever the page actually changes, which is both faster and more
-        # honest: a still page emits nothing because nothing happened.
         latest = {"jpg": None, "n": 0}
         cdp = await ctx.new_cdp_session(page)
         loop_ = asyncio.get_running_loop()
@@ -798,42 +412,30 @@ async def roam(steps_per_page=44, headful=False, seed=None):
             if latest["jpg"] is not None:
                 break
             await asyncio.sleep(0.1)
-        if latest["jpg"] is None:            # screencast never started
+        if latest["jpg"] is None:
             latest["jpg"] = await screenshot(page)
 
         while STATE["running"]:
+            # Check lifespan
+            life_age_s = time.time() - life_start
+            STATE["life_age_s"] = life_age_s
+            if life_age_s >= lifespan_s:
+                await log(f"life ended after {life_age_s:.0f}s (max {lifespan_s:.0f}s)")
+                break
+
             raw = latest["jpg"]
             img = to_gray(raw)
 
-            # Is the fly in the room? Nothing about the walk changes if it is -
-            # same eye, same descending neurons, same stopping rule - but the
-            # room reads the stop, smells the card and keeps the dwell, so it
-            # runs the step in place of the pilot.
-            in_room = room is not None and is_backroom(page.url)
-            if room is not None and in_room != room.in_room:
-                if in_room:
-                    await room.enter(page)
-                    await log("in the backroom")
-                else:
-                    room.leave()
-
             seed_ = rng.randrange(1 << 30)
-            if in_room:
-                dx, dy, click, hz, info = await room.step(page, img, cx, cy, seed_)
-            else:
-                dx, dy, click, hz, info = pilot.step(
-                    img, cx, cy, gains=STATE["gains"], seed=seed_, detail=True)
+            dx, dy, click, hz, info = pilot.step(
+                img, cx, cy, gains=STATE["gains"], seed=seed_, detail=True)
             cx = float(np.clip(cx + dx, 8, 1272))
             cy = float(np.clip(cy + dy, 8, 792))
             stats["steps"] += 1
             on_page += 1
 
             # A fly that walks off the bottom of what it can see should get
-            # more page, not stick to the edge. DNa01 driving down past the
-            # margin scrolls down, MDN driving up scrolls back, and the cursor
-            # is recentred so the walk continues instead of pinning. This is
-            # what makes the view move: without it the page is a still image
-            # with a cursor twitching on it.
+            # more page, not stick to the edge.
             EDGE = 110
             if cy > 800 - EDGE and dy > 0:
                 await page.mouse.wheel(0, 300)
@@ -857,14 +459,9 @@ async def roam(steps_per_page=44, headful=False, seed=None):
                     if not np.isnan(x):
                         scatter.append([round(float(x), 3), round(float(y), 3)])
 
-            # A Kenyon cell that fired just now becomes eligible, and
-            # eligibility fades. No dopamine is delivered anywhere in this
-            # file: the only lessons are profit and loss, and backroom.py
-            # delivers those where they are measured. In the room the Room
-            # does this itself, on the same run it read the mushroom body
-            # from, so doing it again here would count the look twice.
+            # Mushroom body observation (if available)
             mb = STATE.get("mb")
-            if mb is not None and not in_room:
+            if mb is not None:
                 mb.observe(info.get("fired"))
                 mb.forget()
 
@@ -886,12 +483,7 @@ async def roam(steps_per_page=44, headful=False, seed=None):
                              if STATE.get("mb") is not None else None),
             }
 
-            # The fly decides twice a second - that is 12 ms of brain time per
-            # decision, and cutting it shorter would break the retina-to-DN
-            # path rather than speed anything up. What was wrong was the move
-            # in between: the cursor teleported to the new position and the
-            # page never repainted, so nothing was there to stream. Now it
-            # travels there, hover states fire, and the screen actually moves.
+            # Animate cursor movement between positions
             steps_ = 9
             for j in range(1, steps_ + 1):
                 t_ = j / steps_
@@ -904,7 +496,6 @@ async def roam(steps_per_page=44, headful=False, seed=None):
                 await asyncio.sleep(0.028)
             px_, py_ = cx, cy
 
-            bk = backroom_state() if backroom_on() else None
             frame = {"type": "frame", "neural": neural,
                      "events": stats["events"][-18:],
                      "visited": stats["visited"][-8:],
@@ -913,16 +504,14 @@ async def roam(steps_per_page=44, headful=False, seed=None):
                      "stats": {k: stats[k] for k in
                                ("steps", "clicks", "vetoes", "hops",
                                 "blocked", "scrolled")},
-                     "url": page.url}
-            if bk is not None:
-                frame["backroom"] = bk
+                     "url": page.url,
+                     "life_age_s": round(life_age_s, 1),
+                     "lifespan_s": round(STATE.get("lifespan_s", 0), 1),
+            }
             await send(frame)
 
-            # A stop in the room is not a click. room.step has already read it
-            # as a commit or as nothing, and there is nothing on that page to
-            # press: no link to follow, no control to veto, no element to ask
-            # about. So the whole clicking apparatus is skipped there.
-            if click and not in_room:
+            # Click handling
+            if click:
                 under = await page.evaluate(UNDER_JS, [cx, cy])
                 ok, why = may_click(under)
                 if ok:
@@ -958,41 +547,40 @@ async def roam(steps_per_page=44, headful=False, seed=None):
                     stats["vetoes"] += 1
                     await log(f"did not click - {why}")
 
-            # A fly that has run out of page gets put somewhere else. A visit to
-            # the room has its own budget so that a life is not spent in there.
-            if on_page >= (backroom_steps() if in_room else steps_per_page):
+            # A fly that has run out of page gets put somewhere else.
+            if on_page >= steps_per_page:
                 on_page = 0
                 cx, cy = 640.0, 400.0
-                if in_room:
-                    room.leave()
                 await reset("hop budget spent")
 
-            # Whatever the executor settled since the last step. It is applied
-            # here, on this thread, because applying a settled sell runs the
-            # brain - the coin is shown to the fly again - and there is one
-            # brain.
-            if room is not None:
-                room.poll_events()
-
-            publish(stats, raw, page.url, hz, neural, bk)
+            # Save mushroom body periodically
             if mb is not None and stats["steps"] % 40 == 0:
                 mb.save()
+
+            # Publish state
+            publish(stats, raw, page.url, hz, neural)
             await asyncio.sleep(0.05)
 
         cap.cancel()
         await ctx.close()
         await browser.close()
-    await send({"type": "done", "stats": stats})
+
+    # Life ended - log death
+    cause = "lifespan expired" if life_age_s >= lifespan_s else "unknown"
+    last_url = getattr(page, 'url', '') if 'page' in dir() else ""
+    log_death(cause, last_url, stats["steps"],
+              stats["clicks"], stats["hops"], stats["blocked"])
+    STATE["life_death"] = {
+        "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "age_s": round(life_age_s, 1),
+        "cause": cause,
+    }
+    await send({"type": "done", "stats": stats,
+                "life_death": STATE["life_death"]})
 
 
-def publish(stats, jpg, url, hz, neural=None, backroom=None):
-    """
-    Leave the latest frame and a summary on disk.
-
-    The site is static and the fly runs on a machine, so something has to carry
-    the state across. Writing it here keeps that transport separate from the
-    roaming itself - if the publisher is not running, the fly does not care.
-    """
+def publish(stats, jpg, url, hz, neural=None):
+    """Leave the latest frame and a summary on disk."""
     try:
         OUT.mkdir(parents=True, exist_ok=True)
         _atomic_write(OUT / "roam_frame.jpg", jpg)
@@ -1006,33 +594,13 @@ def publish(stats, jpg, url, hz, neural=None, backroom=None):
             "events": stats["events"][-18:],
             "hz": {k: round(v, 1) for k, v in hz.items()},
             "neural": neural,
-            "stream": TUNNEL["url"],
+            "life_age_s": round(STATE.get("life_age_s", 0), 1),
+            "lifespan_s": round(STATE.get("lifespan_s", 0), 1),
+            "life_death": STATE.get("life_death"),
             "updated": int(time.time()),
         }
-        if backroom is not None:
-            state_["backroom"] = backroom
         _atomic_write(OUT / "roam_state.json",
                       json.dumps(state_, indent=1).encode("utf-8"))
-
-        now = time.time()
-        if BLOB_TOKEN and now - _last_push["at"] >= BLOB_EVERY:
-            _last_push["at"] = now
-            import threading
-
-            # Nothing goes to object storage any more.
-            #
-            # Pushing two frames a second suspended the blob store on
-            # operation count - 13 MB held, but the writes and deletes blew
-            # the free tier and every read started answering 403, which took
-            # the public feed down with it. The tunnel already carries frames,
-            # telemetry and events for free, so the only thing that ever
-            # needed publishing is where the tunnel is. That is one small file,
-            # written when the address changes and not otherwise.
-            import threading
-
-            def push():
-                publish_address()
-            threading.Thread(target=push, daemon=True).start()
     except Exception:
         pass
 
@@ -1049,7 +617,11 @@ def index():
 def status():
     return {"running": STATE["running"],
             "seeds": len(SEEDS),
-            "brain": bool(STATE["brain"])}
+            "brain": bool(STATE["brain"]),
+            "life_age_s": round(STATE.get("life_age_s", 0), 1),
+            "lifespan_s": round(STATE.get("lifespan_s", 0), 1),
+            "life_death": STATE.get("life_death"),
+            }
 
 
 @app.get("/state")
@@ -1068,30 +640,15 @@ def frame():
     return Response(b"", media_type="image/jpeg")
 
 
-@app.get("/backroom")
-def backroom_page():
-    """
-    The room itself, served to the fly's own browser over loopback.
-
-    It is a page like any other page, drawn dark with big bright cards because
-    that is what 892 hex columns can resolve. There is nothing on it to press.
-    """
-    return FileResponse(str(ROOT / "web" / "backroom.html"))
-
-
-@app.get("/backroom/board.json")
-def backroom_board():
-    """What the page draws. Empty until the room exists, which needs FLY_BACKROOM=1."""
-    room = STATE.get("room")
-    if room is None:
-        return {"cards": [], "holdings": [], "updated": 0}
-    return room.board()
-
-
-@app.get("/backroom/state")
-def backroom_view():
-    """The paper book and what the fly is doing in the room, for a watcher."""
-    return backroom_state()
+@app.get("/deaths")
+def deaths():
+    """Return death log entries."""
+    try:
+        if DEATHS_FILE.exists():
+            return json.loads(DEATHS_FILE.read_text())
+    except Exception:
+        pass
+    return []
 
 
 @app.websocket("/ws")
@@ -1120,8 +677,6 @@ async def begin():
     if load_env().get("FLY_ALLOW_BROWSER") != "1":
         say("FLY_ALLOW_BROWSER is not 1 - not opening a browser")
         return
-
-    start_tunnel(STATE.get("port", 4660))
 
     async def forever():
         while True:

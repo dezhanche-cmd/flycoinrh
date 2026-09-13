@@ -98,12 +98,17 @@ button:disabled{opacity:.4;cursor:not-allowed}
       <div class="cells" id="cells"></div>
     </div>
     <div>
-      <div class="k">This run</div>
+      <div class="k">This life</div>
       <div class="stats">
         <div class="stat"><div class="n" id="s-hops">0</div><div class="l">pages</div></div>
         <div class="stat"><div class="n" id="s-clicks">0</div><div class="l">clicks</div></div>
         <div class="stat"><div class="n" id="s-steps">0</div><div class="l">brain steps</div></div>
         <div class="stat"><div class="n" id="s-vetoes">0</div><div class="l">vetoed</div></div>
+      </div>
+      <div class="k" style="margin-top:14px">Lifespan</div>
+      <div class="stats">
+        <div class="stat"><div class="n" id="s-life-age">0m</div><div class="l">age</div></div>
+        <div class="stat"><div class="n" id="s-life-max">60m</div><div class="l">max</div></div>
       </div>
     </div>
     <div>
@@ -113,6 +118,12 @@ button:disabled{opacity:.4;cursor:not-allowed}
     <div>
       <div class="k">Where it has been</div>
       <div class="trail" id="trail"></div>
+    </div>
+    <div>
+      <div class="k">Death log</div>
+      <div id="death-log" style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);max-height:160px;overflow:auto;display:grid;gap:4px">
+        <div style="color:var(--ink-dim)">loading...</div>
+      </div>
     </div>
   </div>
 </div>
@@ -203,6 +214,12 @@ function connect(){
       for (const k of ['steps','clicks','vetoes','hops'])
         $('s-'+k).textContent = (m.stats[k]||0).toLocaleString();
       $('url').textContent = m.url || '—';
+      if (m.life_age_s != null) {
+        const age = Math.floor(m.life_age_s / 60);
+        const max = Math.floor(m.lifespan_s / 60);
+        $('s-life-age').textContent = `${age}m`;
+        $('s-life-max').textContent = `${max}m`;
+      }
     }
     else if (m.type === 'place'){
       const a = document.createElement('a');
@@ -220,6 +237,22 @@ function connect(){
       $('pip').classList.remove('on');
       $('pip-t').textContent = 'between lives';
       if (m.msg) log(m.msg, 'blocked');
+      fetch('/deaths').then(r => r.json()).then(deaths => {
+        const el = $('death-log');
+        if (!deaths || deaths.length === 0) {
+          el.innerHTML = '<div style="color:var(--ink-faint)">no deaths yet</div>';
+          return;
+        }
+        el.innerHTML = deaths.slice(-20).reverse().map(d => {
+          const ago = Math.floor((Date.now()/1000 - d.epoch) / 60);
+          const label = ago < 1 ? 'just now' : `${ago}m ago`;
+          return `<div style="border-bottom:1px solid var(--line);padding:4px 0">
+            <span style="color:var(--amber)">${label}</span>
+            <span style="color:var(--ink-dim)"> · ${d.cause}</span>
+            <span style="color:var(--ink-faint)"> · ${d.steps} steps</span>
+          </div>`;
+        }).join('');
+      }).catch(() => {});
     }
   };
   ws.onclose = () => setTimeout(connect, 1500);
@@ -235,11 +268,32 @@ setInterval(async () => {
     $('pip-t').textContent = fresh ? 'roaming' : 'between lives';
     if (d.uptime_s) {
       const m = Math.floor(d.uptime_s/60), h = Math.floor(m/60);
-      $('since').textContent = h ? `${h}h ${m%60}m in this life`
-                                 : `${m}m ${d.uptime_s%60}s in this life`;
+      $('since').textContent = h ? `${h}h ${m%60}m` : `${m}m ${d.uptime_s%60}s`;
+    }
+    if (d.life_age_s != null) {
+      $('s-life-age').textContent = `${Math.floor(d.life_age_s/60)}m`;
+      $('s-life-max').textContent = `${Math.floor(d.lifespan_s/60)}m`;
     }
   } catch (e) {}
 }, 4000);
+
+// Load death log on page load
+fetch('/deaths').then(r => r.json()).then(deaths => {
+  const el = $('death-log');
+  if (!deaths || deaths.length === 0) {
+    el.innerHTML = '<div style="color:var(--ink-faint)">no deaths yet</div>';
+    return;
+  }
+  el.innerHTML = deaths.slice(-20).reverse().map(d => {
+    const ago = Math.floor((Date.now()/1000 - d.epoch) / 60);
+    const label = ago < 1 ? 'just now' : `${ago}m ago`;
+    return `<div style="border-bottom:1px solid var(--line);padding:4px 0">
+      <span style="color:var(--amber)">${label}</span>
+      <span style="color:var(--ink-dim)"> · ${d.cause}</span>
+      <span style="color:var(--ink-faint)"> · ${d.steps} steps</span>
+    </div>`;
+  }).join('');
+}).catch(() => {});
 </script>
 </body>
 </html>
