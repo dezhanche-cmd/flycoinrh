@@ -3,7 +3,7 @@ Download the connectome graph.npz if it doesn't exist yet.
 
 Sources (in order of preference):
 1. The pre-built graph.npz from the project build directory
-2. Download from Google Cloud Storage (slow, ~1.1GB raw data → ~200MB npz)
+2. Download from Google Cloud Storage (slow, ~1.1GB raw data -> ~200MB npz)
 3. Generate a minimal fallback graph for testing
 
 The raw feather files are too large for Docker build-time download on
@@ -13,7 +13,6 @@ import os
 import subprocess
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -25,28 +24,28 @@ GRAPH = BUILD / "graph.npz"
 MINIMAL_BODY_COUNT = 50
 
 def download_feather(url, path):
-    """Download a feather file with progress."""
-    print(f"Downloading {path.name} from {url[:60]}...")
+    """Download a feather file with curl (avoids SSL issues on some systems)."""
+    print(f"Downloading {path.name} from {url[:70]}...")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with urllib.request.urlopen(url, timeout=300) as r:
-            total = int(r.headers.get("content-length", 0))
-            downloaded = 0
-            chunk_size = 8192 * 1024  # 8MB chunks
-            with open(path, "wb") as f:
-                while True:
-                    chunk = r.read(chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total:
-                        pct = downloaded * 100 // total
-                        print(f"  {downloaded // (1024*1024)}MB / {total // (1024*1024)}MB ({pct}%)", end="\r")
-                    else:
-                        print(f"  {downloaded // (1024*1024)}MB", end="\r")
-            print()  # newline after progress
-        return True
+        # Use curl for reliable download (bypasses Python SSL issues)
+        result = subprocess.run(
+            ["curl", "-L", "--progress-bar", "-o", str(path), url],
+            capture_output=True, text=True, timeout=600
+        )
+        if result.returncode != 0:
+            print(f"  curl failed: {result.stderr[:200]}")
+            return False
+        # Check file was created and has content
+        if path.exists() and path.stat().st_size > 0:
+            size_mb = path.stat().st_size // (1024*1024)
+            print(f"  Downloaded {size_mb}MB")
+            return True
+        print(f"  File empty or missing after download")
+        return False
+    except subprocess.TimeoutExpired:
+        print(f"  Download timeout (600s)")
+        return False
     except Exception as e:
         print(f"  Download failed: {e}")
         return False
