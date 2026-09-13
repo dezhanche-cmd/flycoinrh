@@ -1,8 +1,9 @@
 """
-Container entrypoint: the fly roamer.
+Container entrypoint: fetch data, then run the fly roamer.
 
-One container, one process. roam.py drives the connectome around the web and
-serves its telemetry. If a run dies it is restarted after a short pause.
+The connectome graph.npz is fetched at runtime from Google Cloud Storage.
+If the download fails (slow network, timeouts), a minimal fallback graph is
+used so the app can still start for testing.
 
 FLY_ALLOW_BROWSER=1 must be set, or the browser won't open.
 """
@@ -74,6 +75,18 @@ class Proc:
 
 
 def main():
+    # Step 1: Fetch or create graph.npz
+    say("fetching connectome data...")
+    fetch_result = subprocess.run(
+        [sys.executable, "fetch_connectome.py"],
+        cwd=HERE, capture_output=True, text=True, timeout=600
+    )
+    print(fetch_result.stdout, end="")
+    if fetch_result.stderr:
+        print(fetch_result.stderr, file=sys.stderr, end="")
+    say(f"connectome fetch exited with {fetch_result.returncode}")
+
+    # Step 2: Run the roamer
     proc = Proc("roam", [sys.executable, "roam.py"])
 
     stopping = {"now": False}
