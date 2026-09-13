@@ -56,8 +56,9 @@ def fetch_connectome():
     """Download raw feather files and build graph.npz."""
     print("Fetching FlyEM connectome data from Google Cloud Storage...")
 
-    # These are the correct filenames from the FlyEM project
-    BASE = "https://storage.googleapis.com/flyem-male-cns/v1.0/connectome-data"
+    # These are the correct filenames from the FlyEM project (flat-connectome/ subdir)
+    # Source: GitHub Issue #2 - original README path was wrong, correct path is connectome-data/flat-connectome/
+    BASE = "https://storage.googleapis.com/flyem-male-cns/v1.0/connectome-data/flat-connectome"
 
     weights_url = f"{BASE}/connectome-weights-male-cns-v1.0-minconf-0.5.feather"
     annot_url = f"{BASE}/body-annotations-male-cns-v1.0-minconf-0.5.feather"
