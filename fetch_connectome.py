@@ -86,18 +86,23 @@ def fetch_connectome():
         print("Connectome download failed. Will try fallback.")
         return False
 
-    print("Building graph.npz from downloaded data...")
+    print("Building graph.npz from downloaded data...", flush=True)
     try:
         result = subprocess.run(
-            [sys.executable, str(ROOT / "build_graph.py")],
+            [sys.executable, "-u", str(ROOT / "build_graph.py")],
             capture_output=True, text=True, timeout=600
         )
-        print(result.stdout)
+        print(f"build_graph.py rc={result.returncode} stdout_len={len(result.stdout)} stderr_len={len(result.stderr)}", flush=True)
+        print(result.stdout, end="", flush=True)
         if result.returncode != 0:
-            print(f"build_graph.py failed: {result.stderr[:200]}")
+            print(f"build_graph.py failed (rc={result.returncode})", flush=True)
+            print(f"  stderr: {result.stderr[:500]}", flush=True)
             return False
+    except subprocess.TimeoutExpired:
+        print("build_graph.py TIMED OUT after 600s", flush=True)
+        return False
     except Exception as e:
-        print(f"build_graph.py failed: {e}")
+        print(f"build_graph.py FAILED: {e!r}", flush=True)
         return False
 
     print(f"Graph built: {GRAPH} ({GRAPH.stat().st_size // (1024*1024)}MB, {len(np.load(str(GRAPH), allow_pickle=True)['bodies']):,} neurons)", flush=True)
