@@ -91,11 +91,6 @@ def fetch_connectome():
         print(f"build_graph.py failed: {e}")
         return False
 
-    # Cleanup raw files
-    for p in [weights_path, annot_path, nt_path]:
-        if p.exists():
-            p.unlink()
-
     print(f"Graph built: {GRAPH} ({GRAPH.stat().st_size // (1024*1024)}MB)")
     return True
 
