@@ -158,6 +158,13 @@ class FlyPilot:
         back = hz["back"] / 450.0
         stop = hz["stop"] / 450.0
 
+        # Guard against NaN from empty motor neuron selections (e.g. fallback graph)
+        if np.isnan(turn) or np.isnan(fwd) or np.isnan(back) or np.isnan(stop):
+            turn = 0.0
+            fwd = 0.0
+            back = 0.0
+            stop = 0.0
+
         speed = np.clip(fwd - back, -1, 1) * (1.0 - np.clip(stop, 0, 1))
         dx = np.clip(turn, -1, 1) * 90.0
         dy = -speed * 90.0            # forward walking moves up the page
