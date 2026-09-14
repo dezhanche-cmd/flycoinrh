@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import time
+import numpy as np
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -143,12 +144,24 @@ def scipy_sparse_csr_to_npz_format(W):
 
 
 if __name__ == "__main__":
-    if GRAPH.exists():
-        print(f"graph.npz exists ({GRAPH.stat().st_size} bytes), skipping")
-        sys.exit(0)
-
     DATA.mkdir(parents=True, exist_ok=True)
     BUILD.mkdir(parents=True, exist_ok=True)
+
+    # Check if existing graph is a real connectome (165k+ neurons) or a stale fallback
+    if GRAPH.exists():
+        try:
+            z = np.load(str(GRAPH), allow_pickle=True)
+            body_count = len(z["bodies"])
+            if body_count >= 160000:
+                size_mb = GRAPH.stat().st_size // (1024 * 1024)
+                print(f"graph.npz exists ({body_count:,} neurons, {size_mb}MB), skipping")
+                sys.exit(0)
+            print(f"Found stale fallback graph ({body_count} neurons), rebuilding...")
+            GRAPH.unlink()
+        except Exception as e:
+            print(f"Existing graph.npz is invalid ({e}), rebuilding...")
+            if GRAPH.exists():
+                GRAPH.unlink()
 
     # Try to fetch real data first
     if fetch_connectome():
