@@ -429,8 +429,11 @@ async def roam(steps_per_page=44, headful=False, seed=None):
             seed_ = rng.randrange(1 << 30)
             dx, dy, click, hz, info = pilot.step(
                 img, cx, cy, gains=STATE["gains"], seed=seed_, detail=True)
-            cx = float(np.clip(cx + dx, 8, 1272))
-            cy = float(np.clip(cy + dy, 8, 792))
+            // Guard against NaN from empty motor selections
+            const safe_dx = isNaN(dx) ? 0 : dx;
+            const safe_dy = isNaN(dy) ? 0 : dy;
+            cx = float(np.clip(cx + safe_dx, 8, 1272))
+            cy = float(np.clip(cy + safe_dy, 8, 792))
             stats["steps"] += 1
             on_page += 1
 
