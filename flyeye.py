@@ -33,16 +33,20 @@ class FlyEye:
             return x, y
 
         xs, ys = uv(self.on_mask | self.off_mask)
-        self.x0, self.x1 = xs.min(), xs.max()
-        self.y0, self.y1 = ys.min(), ys.max()
+        if len(xs) > 0:
+            self.x0, self.x1 = xs.min(), xs.max()
+            self.y0, self.y1 = ys.min(), ys.max()
+        else:
+            self.x0, self.x1 = 0.0, 1.0
+            self.y0, self.y1 = 0.0, 1.0
 
         self.on_idx = np.flatnonzero(self.on_mask)
         self.off_idx = np.flatnonzero(self.off_mask)
         # raw column indices, for unrolling the eye onto a rectangular display
-        self.on_h1 = h1[self.on_mask].astype(int)
-        self.on_h2 = h2[self.on_mask].astype(int)
-        self.on_uv = self._to_uv(h1[self.on_mask], h2[self.on_mask])
-        self.off_uv = self._to_uv(h1[self.off_mask], h2[self.off_mask])
+        self.on_h1 = h1[self.on_mask].astype(int) if len(self.on_idx) > 0 else np.array([], dtype=int)
+        self.on_h2 = h2[self.on_mask].astype(int) if len(self.on_idx) > 0 else np.array([], dtype=int)
+        self.on_uv = self._to_uv(h1[self.on_mask], h2[self.on_mask]) if len(self.on_idx) > 0 else (np.array([]), np.array([]))
+        self.off_uv = self._to_uv(h1[self.off_mask], h2[self.off_mask]) if len(self.off_idx) > 0 else (np.array([]), np.array([]))
 
     def _to_uv(self, h1, h2):
         x = h1.astype(np.float32) + 0.5 * h2.astype(np.float32)
