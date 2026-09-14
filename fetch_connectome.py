@@ -69,10 +69,18 @@ def fetch_connectome():
     nt_path = DATA / "body-neurotransmitters.feather"
 
     success = True
-    for url, path in [(weights_url, weights_path), (annot_url, annot_path), (nt_url, nt_path)]:
+    for i, (url, path) in enumerate([
+        (weights_url, weights_path),
+        (annot_url, annot_path),
+        (nt_url, nt_path)
+    ]):
+        print(f"  [{i+1}/3] Downloading {path.name} ({url[-60:]})...", flush=True)
         if not download_feather(url, path):
+            print(f"  [{i+1}/3] FAILED: {path.name}", flush=True)
             success = False
             break
+        else:
+            print(f"  [{i+1}/3] OK: {path.name} ({path.stat().st_size // (1024*1024)}MB)", flush=True)
 
     if not success:
         print("Connectome download failed. Will try fallback.")
@@ -92,7 +100,7 @@ def fetch_connectome():
         print(f"build_graph.py failed: {e}")
         return False
 
-    print(f"Graph built: {GRAPH} ({GRAPH.stat().st_size // (1024*1024)}MB)")
+    print(f"Graph built: {GRAPH} ({GRAPH.stat().st_size // (1024*1024)}MB, {len(np.load(str(GRAPH), allow_pickle=True)['bodies']):,} neurons)", flush=True)
     return True
 
 
