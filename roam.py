@@ -65,6 +65,19 @@ def _atomic_write(path, data: bytes):
     os.replace(tmp, path)
 
 
+def _safe_json(obj):
+    """Convert NaN/inf floats to null for JSON safety."""
+    if isinstance(obj, float) and (obj != obj or obj == float('inf') or obj == float('-inf')):
+        return None
+    if isinstance(obj, dict):
+        return {k: _safe_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_safe_json(v) for v in obj]
+    if isinstance(obj, tuple):
+        return [_safe_json(v) for v in obj]
+    return obj
+
+
 # Link-rich, text-heavy, safe places to be dropped into. The fly leaves them
 # on its own within a few clicks; these only decide where a life starts.
 SEEDS = [
@@ -160,7 +173,7 @@ def log_death(cause, url, steps, clicks, hops, blocked):
         })
         # Keep last 1000 deaths
         deaths = deaths[-1000:]
-        _atomic_write(DEATHS_FILE, json.dumps(deaths, indent=1).encode("utf-8"))
+        _atomic_write(DEATHS_FILE, json.dumps(_safe_json(deaths), indent=1).encode("utf-8"))
     except Exception as exc:
         say(f"failed to write death log: {exc}")
 
@@ -603,7 +616,7 @@ def publish(stats, jpg, url, hz, neural=None):
             "updated": int(time.time()),
         }
         _atomic_write(OUT / "roam_state.json",
-                      json.dumps(state_, indent=1).encode("utf-8"))
+                      json.dumps(_safe_json(state_), indent=1).encode("utf-8"))
     except Exception:
         pass
 
