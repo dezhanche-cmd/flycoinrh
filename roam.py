@@ -51,8 +51,8 @@ ROOT = Path(__file__).parent
 OUT = ROOT / "build"
 
 # Random lifespan: each life lasts between MIN and MAX seconds, then dies.
-LIFESPAN_MIN_S = 60    # 1 minute
-LIFESPAN_MAX_S = 3600  # 60 minutes
+LIFESPAN_MIN_S = 1      # 1 second
+LIFESPAN_MAX_S = 1800   # 30 minutes
 
 # Death log file
 DEATHS_FILE = OUT / "deaths.json"
